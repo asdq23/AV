@@ -1,0 +1,224 @@
+import os
+import tkinter as tk
+from tkinter import messagebox, scrolledtext, ttk
+import threading
+
+# Function to perform a basic file scan
+def scan_files(directory):
+    suspicious_patterns = ['virus', 'malware', 'trojan']  # Example patterns to check for
+    files_checked = 0
+    files_infected = []
+    
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                with open(file_path, 'r', errors='ignore') as f:
+                    content = f.read()
+                    if any(pattern in content.lower() for pattern in suspicious_patterns):
+                        files_infected.append(file_path)
+                    files_checked += 1
+            except Exception as e:
+                print(f"Error reading file {file_path}: {e}")
+
+    return files_checked, files_infected
+
+# Function to delete infected files
+def delete_infected_files(files):
+    deleted_files = []
+    for file in files:
+        try:
+            os.remove(file)
+            deleted_files.append(file)
+        except Exception as e:
+            print(f"Failed to delete {file}: {e}")
+    return deleted_files
+
+# Function to generate scan statistics
+def generate_statistics(total_files_scanned, total_infected, total_deleted):
+    return (
+        f"Total Files Scanned: {total_files_scanned}\n"
+        f"Total Infected Files: {total_infected}\n"
+        f"Total Files Deleted: {total_deleted}"
+    )
+
+# Function to update status in the scanning window
+def update_status(message):
+    scan_output_text.insert(tk.END, message + "\n")
+    scan_output_text.yview(tk.END)
+
+# Function to handle the final step of showing infected files and asking for deletion
+def show_infected_files_popup(infected_files):
+    def on_confirm():
+        selected_files = [file for file, var in file_vars.items() if var.get()]
+        if selected_files:
+            deleted_files = delete_infected_files(selected_files)
+            update_status("Infected files deleted:")
+            for file in deleted_files:
+                update_status(f"Deleted: {file}")
+        else:
+            update_status("No files selected for deletion.")
+        popup.destroy()
+
+    def on_exit():
+        popup.destroy()
+
+    popup = tk.Toplevel()
+    popup.title("Infected Files")
+    popup.geometry("800x600")  # Increased width for a wider window
+    popup.minsize(800, 600)  # Set minimum size to prevent resizing smaller
+    popup.resizable(True, True)  # Allow resizing
+
+    # Create a canvas and scrollbar for the list of files
+    canvas = tk.Canvas(popup)
+    scrollbar = tk.Scrollbar(popup, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas)
+
+    # Configure scrollbar and canvas
+    canvas.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+    def on_canvas_configure(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    scrollable_frame.bind("<Configure>", on_canvas_configure)
+
+    tk.Label(scrollable_frame, text="Select files to delete:", font=("Arial", 12)).pack(pady=10)
+
+    file_vars = {}
+    for file in infected_files:
+        var = tk.BooleanVar()
+        file_vars[file] = var
+        chk = ttk.Checkbutton(scrollable_frame, text=file, variable=var, style='TCheckbutton')
+        chk.pack(anchor='w', padx=20, pady=5)
+
+    # Create a frame for the buttons
+    button_frame = tk.Frame(popup)
+    button_frame.pack(side=tk.BOTTOM, pady=20, fill=tk.X)
+
+    # Add buttons at the bottom
+    confirm_button = tk.Button(button_frame, text="Confirm Deletion", command=on_confirm, bg='#007ACC', fg='#ffffff', relief='flat', font=("Arial", 12))
+    confirm_button.config(width=15, height=2, borderwidth=1, highlightthickness=0, padx=10, pady=5, anchor='center', bd=5)
+    confirm_button.pack(side=tk.LEFT, padx=10)
+
+    exit_button = tk.Button(button_frame, text="Exit", command=on_exit, bg='#FF6F61', fg='#ffffff', relief='flat', font=("Arial", 12))
+    exit_button.config(width=15, height=2, borderwidth=1, highlightthickness=0, padx=10, pady=5, anchor='center', bd=5)
+    exit_button.pack(side=tk.RIGHT, padx=10)
+
+# Configure custom style for checkbutton
+def configure_checkbutton_style():
+    style = ttk.Style()
+    style.configure('TCheckbutton',
+                    font=("Arial", 10),
+                    padding=5)
+    style.map('TCheckbutton',
+              background=[('selected', '#007ACC')],
+              foreground=[('selected', '#ffffff')],
+              relief=[('selected', 'flat')],
+              )
+
+# Function to start scan and show scanning window
+def start_scan(directory):
+    if not os.path.exists(directory):
+        messagebox.showerror("Error", "Invalid directory path.")
+        return
+
+    drive_window.withdraw()
+
+    global scan_window
+    scan_window = tk.Toplevel()
+    scan_window.title("Scanning")
+    scan_window.geometry("800x600")
+
+    global infected_files_count_label
+    infected_files_count_label = tk.Label(scan_window, text="Infected Files Count: 0", font=("Arial", 16, "bold"))
+    infected_files_count_label.pack(pady=10)
+
+    global status_indicator
+    status_indicator = tk.Label(scan_window, text="Idle", font=("Arial", 24, "bold"))
+    status_indicator.pack(pady=10)
+
+    global progress_message_label
+    progress_message_label = tk.Label(scan_window, text="Please wait, this may take a while.",
+                                       font=("Arial", 14, "bold"))
+    progress_message_label.pack(pady=10)
+
+    global progress_bar
+    progress_bar = ttk.Progressbar(scan_window, length=500, mode='indeterminate', style='TProgressbar')
+    progress_bar.pack(pady=10)
+    progress_bar.start()
+
+    global scan_output_text
+    scan_output_text = tk.scrolledtext.ScrolledText(scan_window, width=90, height=15, wrap=tk.WORD)
+    scan_output_text.pack(pady=10, fill=tk.BOTH, expand=True)
+
+    # Start scan in a separate thread
+    def run_scan():
+        try:
+            status_indicator.config(text="Scanning...")
+            update_status(f"Starting scan on {directory}...")
+            total_files_scanned, infected_files = scan_files(directory)
+
+            total_infected = len(infected_files)
+            total_deleted = 0
+
+            stats = generate_statistics(total_files_scanned, total_infected, total_deleted)
+            update_status("Scan complete.")
+            update_status(stats)
+
+            # Update infected files count label
+            infected_files_count_label.config(text=f"Infected Files Count: {total_infected}")
+
+            if infected_files:
+                update_status("Infected files detected:")
+                for path in infected_files:
+                    update_status(f"{path}")
+
+                # Show popup for user to select files for deletion
+                show_infected_files_popup(infected_files)
+
+            status_indicator.config(text="Complete")
+        except Exception as e:
+            status_indicator.config(text="Error")
+            update_status(f"An error occurred: {e}")
+        finally:
+            progress_bar.stop()
+            progress_bar.pack_forget()
+            progress_message_label.pack_forget()
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+# Function to handle directory selection and start the scan
+def on_scan_button_click(event=None):
+    directory = directory_entry.get().strip()
+    if not directory:
+        messagebox.showerror("Error", "Please enter a directory path.")
+        return
+    start_scan(directory)
+
+# Directory selection window
+drive_window = tk.Tk()
+drive_window.title("Select Directory")
+drive_window.geometry("400x250")
+drive_window.minsize(400, 250)  # Set minimum size for initial window size
+
+tk.Label(drive_window, text="Enter the directory path (e.g., C:\\):",
+         font=("Arial", 12)).pack(pady=10)
+directory_entry = tk.Entry(drive_window, width=25, font=("Arial", 12))
+directory_entry.pack(pady=10)
+
+scan_button = tk.Button(drive_window, text="Start Scan", command=on_scan_button_click,
+                       font=("Arial", 12), bg='#007ACC', fg='#ffffff')
+scan_button.pack(pady=20)
+
+drive_window.bind('<Return>', on_scan_button_click)
+
+style = ttk.Style()
+style.configure('TProgressbar', thickness=20, troughcolor='#444', background='#007ACC', bordercolor='#444')
+
+# Configure custom style for checkbutton
+configure_checkbutton_style()
+
+drive_window.mainloop()
